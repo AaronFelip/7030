@@ -1,155 +1,85 @@
-import hashlib
-import os
 import sqlite3
-import random
-import uuid
-from datetime import date
+import json
+from utilisateur import Utilisateur
 
 
-def get_avatar_aleatoire():
-    avatar = ['anime.png', 'batman.png', 'bear-russia.png', 'coffee.png', 'jason.png', 'zombie.png']
-    return random.choice(avatar)
-
-
-class Database():
-
+class Database:
     def __init__(self):
         self.connection = None
 
     def get_connection(self):
         if self.connection is None:
-            self.connection = sqlite3.connect('db/database.db')
+            self.connection = sqlite3.connect('db/data.db')
         return self.connection
 
-
-    def close_connection(self):
+    def disconnect(self):
         if self.connection is not None:
             self.connection.close()
 
-
-    def creer_utilisateur(self, nom, prenom, courriel, mdp):
-        salt = uuid.uuid4().hex
-        hashed_password = (
-            hashlib.sha512(str(mdp + salt).encode("utf-8")).hexdigest())
-        date_inscription = date.today()
+    def creer_utilisateur(self, utilisateur):
         connection = self.get_connection()
-        connection.execute(
-            "INSERT INTO utilisateur(nom, prenom, courriel, "
-            "date_inscription, mot_de_passe_salt, mot_de_passe_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (nom, prenom, courriel, date_inscription, salt, hashed_password)
-        )
+        cursor = connection.cursor()
+        grades_json = json.dumps(utilisateur.grades_universitaires)
+
+        cursor.execute(
+            "INSERT INTO utilisateur (nom, prenom, age, "
+            "date_naissance, grades_universitaires) VALUES (?, ?, ?, ?, ?)",
+            (utilisateur.nom, utilisateur.prenom, utilisateur.age,
+             utilisateur.date_naissance, grades_json))
         connection.commit()
 
-
-        # Dans la classe Database
-    def verifier_utilisateur(self, courriel, mdp):
-        """Vérifie les credentials de l'utilisateur et retourne ses données si valides."""
+    def modifier_utilisateur(self, utilisateur):
         connection = self.get_connection()
         cursor = connection.cursor()
-        try:
-            # Récupère le salt et le hash stockés
-            cursor.execute(
-                "SELECT id, nom, prenom, mot_de_passe_salt, mot_de_passe_hash "
-                "FROM utilisateur WHERE courriel = ?",
-                (courriel,)
-            )
-            user = cursor.fetchone()
+        grades_json = json.dumps(
+            utilisateur.grades_universitaires) if utilisateur.grades_universitaires else None
 
-            if user:
-                user_id, nom, prenom, salt, stored_hash = user
-                # Génère le hash avec le mot de passe fourni et le salt stocké
-                hashed_password = hashlib.sha512(
-                    str(mdp + salt).encode("utf-8")
-                ).hexdigest()
+        champs_a_modifier = []
+        valeurs_a_utiliser = []
 
-                # Vérifie si les hashs correspondent
-                if hashed_password == stored_hash:
-                    return {
-                        'id': user_id,
-                        'nom': nom,
-                        'prenom': prenom,
-                        'courriel': courriel
-                    }
-        finally:
-            cursor.close()
-        return None
+        if utilisateur.nom:
+            champs_a_modifier.append("nom = ?")
+            valeurs_a_utiliser.append(utilisateur.nom)
+        if utilisateur.prenom:
+            champs_a_modifier.append("prenom = ?")
+            valeurs_a_utiliser.append(utilisateur.prenom)
+        if utilisateur.age is not None:  # Permet de gérer l'âge à 0
+            champs_a_modifier.append("age = ?")
+            valeurs_a_utiliser.append(utilisateur.age)
+        if utilisateur.date_naissance:
+            champs_a_modifier.append("date_naissance = ?")
+            valeurs_a_utiliser.append(utilisateur.date_naissance)
+        if grades_json:  # On vérifie si la liste est non vide ou non None
+            champs_a_modifier.append("grades_universitaires = ?")
+            valeurs_a_utiliser.append(grades_json)
 
+        # Construire la requête SQL de mise à jour
+        sql = "UPDATE utilisateur SET " + ", ".join(
+            champs_a_modifier) + " WHERE id = ?"
+        valeurs_a_utiliser.append(utilisateur.id)
 
-
-    def courriel_existe(self, courriel):
-        connection = self.get_connection()
-        cursor = connection.cursor()
-        try:
-            cursor.execute("SELECT 1 FROM utilisateur WHERE courriel = ?", (courriel,))
-            return cursor.fetchone() is not None
-        finally:
-            cursor.close()
-
-
-    # Avatar management
-    def mettre_avatar_a_jour(self, user_id, avatar_data):
-        connection = self.get_connection()
-        cursor = connection.cursor()
-        avatar_id = str(uuid.uuid4())
-        cursor.execute(
-            "INSERT INTO avatar (id, data) VALUES (?, ?)",
-            (avatar_id, avatar_data)
-        )
-        cursor.execute(
-            "UPDATE user SET avatar_id = ? WHERE id = ?",
-            (avatar_id, user_id)
-        )
+        cursor.execute(sql, valeurs_a_utiliser)
         connection.commit()
-        return avatar_id
 
-    def charger_avatar(self, avatar_id):
-        if avatar_id in ['anime.png', 'batman.png', 'bear-russia.png', 'coffee.png', 'jason.png', 'zombie.png']:
-            avatar_path = os.path.join('static', 'images', 'def-avatar', avatar_id)
-            with open(avatar_path, 'rb') as f:
-                return f.read()
+        if cursor.rowcount == 0:
+            return False
         else:
-            connection = self.get_connection()
-            cursor = connection.cursor()
-            cursor.execute("SELECT data FROM avatar WHERE id = ?", (avatar_id,))
-            result = cursor.fetchone()
-            if result:
-                return result[0]
-        return None
+            return True
 
 
-    def get_user_by_id(self, user_id):
+    def obtenir_tous_les_utilisateurs(self):
         connection = self.get_connection()
         cursor = connection.cursor()
-        cursor.execute("SELECT id, nom, prenom, courriel, avatar_id from utilisateur WHERE id = ?""",(user_id,))
-        user = cursor.fetchone()
-        if user:
-            return {
-                'id': user[0],
-                'nom': user[1],
-                'prenom': user[2],
-                'courriel': user[3],
-                'avatar_id': user[4]
-            }
-        return None
+        cursor.execute(
+            "SELECT id, nom, prenom, age, date_naissance, grades_universitaires FROM utilisateur"
+        )
 
+        utilisateurs = []
+        for row in cursor.fetchall():
+            id, nom, prenom, age, date_naissance, grades_json = row
+            grades_universitaires = json.loads(grades_json) if grades_json else []
+            utilisateur = Utilisateur(id, nom, prenom, age, date_naissance,
+                                      grades_universitaires)
+            utilisateurs.append(utilisateur)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        return utilisateurs
